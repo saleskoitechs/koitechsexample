@@ -1,0 +1,127 @@
+import { observable, action } from 'mobx';
+import { IUser, IUsersStore, IEditableUser, IRole } from '../interfaces';
+
+import BaseStore from './BaseStore';
+import { copyToClipboard } from '../helpers';
+
+export default class UsersStore extends BaseStore implements IUsersStore {
+   @observable public usersMap: Map<string, IUser> = new Map();
+   @observable public editableUser: IEditableUser = null;
+   @observable public deletableUser: IUser = null;
+   @observable public newUser: IUser = {
+       name: '',
+       email: '',
+       role: 'user',
+       password: '',
+       roles: []
+   };
+
+   @action.bound
+   public async getUsers(): Promise<void> {
+       const accountId = this.rootStore.accountsStore.currentAccountId;
+
+       if(!accountId) {
+           return;
+       }
+
+       const users: IUser[] = await this.rootStore.requester.userService.list(accountId);
+       const usersMap: Map<string, IUser> = new Map();
+
+       for (const user of users) {
+           const { id } = user;
+
+           usersMap.set(id, user);
+       }
+
+       this.usersMap = usersMap;
+   }
+
+   @action.bound
+   public clearUsersList(): void {
+       this.usersMap = new Map();
+   }
+
+   @action.bound
+   public setEditableUser(user: IEditableUser): void {
+       const accountId = this.rootStore.accountsStore.currentAccountId;
+       const role = user.roles.find((role: IRole) => role.account_id === accountId);
+       user.role = role?.role;
+       this.editableUser = user;
+   }
+
+   @action.bound
+   public resetEditableUser(): void {
+       this.editableUser = null;
+   }
+   @action.bound
+   public resetDeletableUser(): void {
+       this.deletableUser = null;
+   }
+   @action.bound
+   public setDeletableUser(id: string): void {
+       this.deletableUser = this.usersMap.get(id);
+   }
+
+   @action.bound
+   public async createUser(user: IUser) {
+       const accountId = this.rootStore.accountsStore.currentAccountId;
+       const result = await this.rootStore.requester.userService.createUser(accountId, user);
+
+       if (result) {
+           this.usersMap.set(user.id, result);
+           this.resetEditableUser();
+       }
+   }
+
+   @action.bound
+   public async deleteUser(userId: string) {
+       const accountId = this.rootStore.accountsStore.currentAccountId;
+       try {
+           await this.rootStore.requester.userService.removeUser(accountId, userId);
+           this.usersMap.delete(userId);
+           this.resetDeletableUser();
+       } catch (e) {
+           this.rootStore.notificationsStore.enqueueError('Error deleting user.');
+           console.error(e);
+           this.resetDeletableUser();
+       }
+   }
+
+   @action.bound
+   public async updateUser(userId: string, user: IUser) {
+       const accountId = this.rootStore.accountsStore.currentAccountId;
+       const result = await this.rootStore.requester.userService.updateUser(accountId, userId, user);
+
+       if(user.id === this.rootStore.authStore.currentUserId
+           && user.password) {
+           this.rootStore.authStore.logout();
+           copyToClipboard(user.password);
+           this.rootStore.notificationsStore.enqueueInfo('Password has been copied to clipboard.');
+           this.resetEditableUser();
+           return;
+       }
+
+       if (result) {
+           result.roles = result.roles || [];
+           this.usersMap.set(result.id, result);
+
+           if(this.rootStore.authStore.currentUserId === result.id) {
+               this.rootStore.authStore.getMe(true);
+           }
+
+           this.resetEditableUser();
+       } else {
+           this.rootStore.notificationsStore.enqueueError('Error updating user.');
+       }
+   }
+
+   @action.bound
+   public async updatePassword(
+       userId: string,
+       password: string
+   ): Promise<void> {
+       return await this.rootStore.requester.userService.updatePassword(userId, password);
+   }
+}
+
+ 
